@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+# Name:     prox-dush
+# Author:   David Vogel <david@davidvogel.xyz>
+# Date:     2025 Oct 12, Sun
+# License:  GPL v3.0
+# Desc:     `prox-dush` shows which VMs are using the most disk space.
+
+dir_vm_configs="/etc/pve/qemu-server"
+
+declare -A names
+
+get_names() {
+    for vm in ${dir_vm_configs}/*; do
+        # Exit if no VMs found.
+        if [[ "$vm##*/" == "*" ]]; then
+            echo "[INFO]: There are no VMs in \`${dir_vm_configs}\`."
+            exit 0
+        fi
+
+        # Grab the name from the VM's config file
+        local name=$(grep "name: " "${vm}")
+
+        # Remove left-side bloat (path info)
+        local id=${vm##*/}
+
+        # Remove right-side bloat (file extension)
+        id=${id%%.conf*}
+
+        # Associate `$name` to `$id`
+        names[$id]="${name##*name: }"
+    done
+}
+
+print_table() {
+    # Print titles
+    printf "%-12s %-16s %s\n" "SIZE" "VM ID" "NAME OF VM"
+
+    while read -r size path; do
+        local id="${path##*/}"
+
+        printf "%-12s %-16s %s\n" "$size" "$id" "${names[$id]}"
+    done < <(du -sh /var/lib/vz/images/* | sort -rh)
+}
+
+main() {
+    get_names
+
+    print_table
+}
+
+main

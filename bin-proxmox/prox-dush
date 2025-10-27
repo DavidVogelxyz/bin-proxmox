@@ -6,46 +6,95 @@
 # License:  GPL v3.0
 # Desc:     `prox-dush` shows which VMs are using the most disk space.
 
-dir_vm_configs="/etc/pve/qemu-server"
+dirs_configs=()
+dirs_configs+=("/etc/pve/qemu-server")        # VM config directory
+dirs_configs+=("/etc/pve/lxc")                # container config directory
 
-declare -A names
-
-get_names() {
-    for vm in ${dir_vm_configs}/*; do
-        # Exit if no VMs found.
-        if [[ "$vm##*/" == "*" ]]; then
-            echo "[INFO]: There are no VMs in \`${dir_vm_configs}\`."
-            exit 0
-        fi
-
-        # Grab the name from the VM's config file
-        local name=$(grep "name: " "${vm}")
-
-        # Remove left-side bloat (path info)
-        local id=${vm##*/}
-
-        # Remove right-side bloat (file extension)
-        id=${id%%.conf*}
-
-        # Associate `$name` to `$id`
-        names[$id]="${name##*name: }"
-    done
-}
-
-print_table() {
-    # Print titles
-    printf "%-12s %-16s %s\n" "SIZE" "VM ID" "NAME OF VM"
+get_info() {
+    total_usage=0
 
     while read -r size path; do
         local id="${path##*/}"
 
-        printf "%-12s %-16s %s\n" "$size" "$id" "${names[$id]}"
+        # The ID will be added to `$ids` from largest size to smallest size
+        ids+=($id)
+        sizes[$id]="$size"
+
+        # Remove the "G" or "M" from the size
+        # Then, handle decimals by setting all values to increments of 100 KB
+        if ! [[ "${size##*G}" ]]; then
+            usage="${size%%G*}"
+
+            # If NO DECIMAL; else IF DECIMAL
+            if ! [[ "$usage" == *"."* ]]; then
+                usage="$((usage * 10000))"
+            else
+                usage="${usage%%.*}${usage##*.}"
+                usage="$((usage * 1000))"
+            fi
+        elif ! [[ "${size##*M}" ]]; then
+            usage="${size%%M*}"
+
+            # If NO DECIMAL; else IF DECIMAL
+            if ! [[ "$usage" == *"."* ]]; then
+                usage="$((usage * 10))"
+            else
+                usage="${usage%%.*}${usage##*.}"
+            fi
+        fi
+
+        usage[$id]="$usage"
+        total_usage=$((total_usage += usage))
     done < <(du -sh /var/lib/vz/images/* | sort -rh)
 }
 
-main() {
-    get_names
+get_names() {
+    for dir in "${dirs_configs[@]}"; do
+        for obj in ${dir}/*; do
+            # Exit if no VM/containers were found.
+            if [[ "${obj##*/}" == "*" ]]; then
+                return 0
+            fi
 
+            # Grab the name from the VM's config file
+            local name=$(grep "name: " "${obj}")
+
+            # Remove left-side bloat (path info)
+            local id=${obj##*/}
+
+            # Remove right-side bloat (file extension)
+            id=${id%%.conf*}
+
+            # Associate `$name` to `$id`
+            names[$id]="${name##*name: }"
+        done
+    done
+}
+
+print_table() {
+    # If VMs or containers, print titles
+    if [[ "$ids[@]"  ]]; then
+        echo -e "\n[WARN]: \"USAGE\" is the % of the used space, NOT the total disk!\n"
+        printf "%-8s %-8s %-16s %s\n" "SIZE" "USAGE" "VM ID" "NAME OF VM"
+    else
+        echo "[WARN]: There are no VMs or containers on this Proxmox. Exiting now."
+        exit 1
+    fi
+
+    for id in "${ids[@]}"; do
+        printf "%-8s %-8s %-16s %s\n" "${sizes[$id]}" "$((usage[$id] * 100 / total_usage))%" "$id" "${names[$id]}"
+    done
+}
+
+main() {
+    declare -A sizes
+    declare -A names
+    declare -A usage
+
+    ids=()
+
+    get_info
+    get_names
     print_table
 }
 
